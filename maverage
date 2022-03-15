@@ -1,0 +1,471 @@
+#include <Trade\Trade.mqh>
+CTrade trade;
+input int                     ma_periodo = 50;//Período da Média
+input int                     ma_desloc = 0;//Deslocamento da Média
+input ENUM_MA_METHOD          ma_metodo = MODE_SMA;//Método Média Móvel
+input ENUM_APPLIED_PRICE      ma_preco = PRICE_CLOSE;//Preço para Média
+
+input ulong                   magicNum = 123456;//Magic Number
+input ulong                   desvPts = 50;//Desvio em Pontos
+input ENUM_ORDER_TYPE_FILLING preenchimento = ORDER_FILLING_RETURN;//Preenchimento da Ordem
+
+input double                  lote = 1.0;//Volume
+input double                  stopLoss = 40;//Stop Loss
+input double                  takeProfit = 60;//Take Profit
+input double                  gatilhoBE = 0;//Gatilho BreakEven
+input double                  gatilhoTS = 0;//Gatilho TrailingStop
+input double                  stepTS = 0;//Step TrailingStop
+
+input int                     horaInicioAbertura = 10;//Hora de Inicio de Abertura de Posições
+input int                     minutoInicioAbertura = 30;//Minuto de Inicio de Abertura de Pisoções
+input int                     horaFimAbertura = 16;//Hora de Encerramento de Abertura de Posições
+input int                     minutoFimAbertura = 45;//Minuto de Encerramento de Abertura de Posições
+input int                     horaInicioFechamento = 17;//Hora de Inicio de Fechamento de Posições
+input int                     minutoInicioFechamento = 20;//Minuto de Inicio de Fechamento de Posições
+
+double                        PRC;//Preço normalizado
+double                        STL;//StopLoss normalizado
+double                        TKP;//TakeProfit normalizado]
+
+double                        smaArrayVeryLong[];
+int                           smaHandleVeryLong;
+
+double                        smaArrayLong[];
+int                           smaHandleLong;
+
+double                        smaArrayMidle[];
+int                           smaHandleMidle;
+
+double                        smaArrayShort[];
+int                           smaHandleShort;
+
+double                        smaArrayExpoShort[];
+int                           smaHandleExpoShort;
+
+int                           HighestCandle;
+int                           LowestCandle;
+
+double                        High[];
+double                        Low[];
+
+bool                          posAberta;
+bool                          ordPendente;
+bool                          beAtivo;
+
+MqlTick                       ultimoTick;
+MqlRates                      rates[];
+MqlDateTime                   horaAtual;
+//+------------------------------------------------------------------+
+//|                                                                  |
+//+------------------------------------------------------------------+
+int OnInit()
+  {
+   
+   smaHandleVeryLong = iMA(_Symbol, _Period, 200, ma_desloc, ma_metodo, ma_preco);
+   if(smaHandleVeryLong==INVALID_HANDLE)
+     {
+      Print("Erro ao criar média móvel: Long - erro", GetLastError());
+      return(INIT_FAILED);
+     }
+   smaHandleLong = iMA(_Symbol, _Period, 100, ma_desloc, ma_metodo, ma_preco);
+   if(smaHandleLong==INVALID_HANDLE)
+     {
+      Print("Erro ao criar média móvel: Long - erro", GetLastError());
+      return(INIT_FAILED);
+     }
+     
+   smaHandleMidle = iMA(_Symbol, _Period, 50, ma_desloc, ma_metodo, ma_preco);
+   if(smaHandleMidle==INVALID_HANDLE)
+     {
+      Print("Erro ao criar média móvel: Midle - erro", GetLastError());
+      return(INIT_FAILED);
+     } 
+     
+   smaHandleShort = iMA(_Symbol, _Period, 10, ma_desloc, ma_metodo, ma_preco);
+   if(smaHandleShort==INVALID_HANDLE)
+     {
+      Print("Erro ao criar média móvel: Short - erro", GetLastError());
+      return(INIT_FAILED);
+     }
+   smaHandleExpoShort = iDEMA(_Symbol, _Period, 10, 0, PRICE_CLOSE);
+   if(smaHandleShort==INVALID_HANDLE)
+     {
+      Print("Erro ao criar média móvel: Short - erro", GetLastError());
+      return(INIT_FAILED);
+     } 
+    
+   ArraySetAsSeries(smaArrayVeryLong, true); 
+   ArraySetAsSeries(smaArrayLong, true);
+   ArraySetAsSeries(smaArrayMidle, true);
+   ArraySetAsSeries(smaArrayShort, true);
+   ArraySetAsSeries(smaArrayExpoShort, true);
+   ArraySetAsSeries(rates, true);
+   ArraySetAsSeries(High, true);
+   ArraySetAsSeries(Low, true);
+   trade.SetTypeFilling(preenchimento);
+   trade.SetDeviationInPoints(desvPts);
+   trade.SetExpertMagicNumber(magicNum);
+   if(horaInicioAbertura > horaFimAbertura || horaFimAbertura > horaInicioFechamento)
+     {
+      Alert("Inconsistência de Horários de Negociação!");
+      return(INIT_FAILED);
+     }
+   if(horaInicioAbertura == horaFimAbertura && minutoInicioAbertura >= minutoFimAbertura)
+     {
+      Alert("Inconsistência de Horários de Negociação!");
+      return(INIT_FAILED);
+     }
+   if(horaFimAbertura == horaInicioFechamento && minutoFimAbertura >= minutoInicioAbertura)
+     {
+      Alert("Inconsistência de Horários de Negociação!");
+      return(INIT_FAILED);
+     }
+   return(INIT_SUCCEEDED);
+  }
+//+------------------------------------------------------------------+
+//|                                                                  |
+//+------------------------------------------------------------------+
+void OnTick()
+  {
+   if(!SymbolInfoTick(Symbol(),ultimoTick))
+     {
+         Alert("Erro ao obter informações de Preços: ", GetLastError());
+         return;
+     }
+   if(CopyRates(_Symbol, _Period, 0, 3, rates)<0)
+     {
+         Alert("Erro ao obter as informações de MqlRates: ", GetLastError());
+         return;
+     }
+   if(CopyBuffer(smaHandleVeryLong, 0, 0, 3, smaArrayVeryLong)<0)
+     {
+         Alert("Erro ao copiar dados da média móvel: ", GetLastError());
+         return;
+     }
+   if(CopyBuffer(smaHandleLong, 0, 0, 3, smaArrayLong)<0)
+     {
+         Alert("Erro ao copiar dados da média móvel: ", GetLastError());
+         return;
+     }
+   if(CopyBuffer(smaHandleMidle, 0, 0, 3, smaArrayMidle)<0)
+     {
+         Alert("Erro ao copiar dados da média móvel: ", GetLastError());
+         return;
+     }
+   if(CopyBuffer(smaHandleShort, 0, 0, 3, smaArrayShort)<0)
+     {
+         Alert("Erro ao copiar dados da média móvel: ", GetLastError());
+         return;
+     }
+   if(CopyBuffer(smaHandleExpoShort, 0, 0, 3, smaArrayExpoShort)<0)
+     {
+         Alert("Erro ao copiar dados da média móvel: ", GetLastError());
+         return;
+     }
+   if(CopyHigh(_Symbol,_Period,0,3,High)<0)
+      {
+         Alert("Erro ao copiar dados do Preço máximo: ", GetLastError());
+         return;
+      }
+    if(CopyLow(_Symbol,_Period,0,3,Low)<0)
+      {
+         Alert("Erro ao copiar dados do Preço mínimo: ", GetLastError());
+         return;
+      }       
+   posAberta = false;
+   for(int i = PositionsTotal()-1; i>=0; i--)
+     {
+      string symbol = PositionGetSymbol(i);
+      ulong magic = PositionGetInteger(POSITION_MAGIC);
+      if(symbol == _Symbol && magic == magicNum)
+        {
+         posAberta = true;
+         break;
+        }
+     }
+   ordPendente = false;
+   for(int i = OrdersTotal()-1; i>=0; i--)
+     {
+      ulong ticket = OrderGetTicket(i);
+      string symbol = OrderGetString(ORDER_SYMBOL);
+      ulong magic = OrderGetInteger(ORDER_MAGIC);
+      if(symbol == _Symbol && magic == magicNum)
+        {
+         ordPendente = true;
+         break;
+        }
+     }
+   if(!posAberta)
+     {
+      beAtivo = false;
+     }
+   if(posAberta && !beAtivo)
+     {
+      BreakEven(ultimoTick.last);
+     }
+   if(posAberta && beAtivo)
+     {
+      TrailingStop(ultimoTick.last);
+     }
+   if(HoraFechamento())
+     {
+      Comment("Horário de Fechamento de Posições!");
+     }
+   else
+      if(HoraNegociacao())
+        {
+         Comment("Dentro do Horário de Negociação!");
+        }
+      else
+        {
+         Comment("Fora do Horário de Negociação!");
+        }
+        
+      double Balance=AccountInfoDouble(ACCOUNT_BALANCE);
+      double Equity=AccountInfoDouble(ACCOUNT_EQUITY);
+      
+      double DinamicSize = NormalizeDouble((Equity / 24000),2);
+      
+      HighestCandle = ArrayMaximum(High,0,WHOLE_ARRAY);
+      LowestCandle = ArrayMinimum(Low,0,WHOLE_ARRAY);
+      
+      int Data = CopyRates(Symbol(),Period(),0,Bars(Symbol(),Period()),rates);
+      
+      double highstPrice = rates[HighestCandle].close;
+      double lowestPrice = rates[LowestCandle].close;
+   if(  /* !posAberta && !ordPendente && */   /*HoraNegociacao()*/    Equity >= Balance && BuyTime())
+        
+     {
+  double ASK = NormalizeDouble(SymbolInfoDouble(_Symbol,SYMBOL_ASK),_Digits);
+         STL = NormalizeDouble(ASK - 0.00003, _Digits);
+         TKP = NormalizeDouble(ASK + 0.00009, _Digits);
+      if(trade.Buy(DinamicSize, _Symbol, ASK, STL, TKP, ""))
+        {
+         Print("Ordem de Compra - sem falha. ResultRetcode: ", trade.ResultRetcode(), ", RetcodeDescription: ", trade.ResultRetcodeDescription());
+        }
+      else
+        {
+         Print("Ordem de Compra - com falha. ResultRetcode: ", trade.ResultRetcode(), ", RetcodeDescription: ", trade.ResultRetcodeDescription());
+        }
+     }
+      if(  /* !posAberta && !ordPendente && */  /*HoraNegociacao()*/   Equity >= Balance && SellTime())
+        {
+  double BID = NormalizeDouble(SymbolInfoDouble(_Symbol,SYMBOL_BID),_Digits);       
+         STL = NormalizeDouble(BID + 0.00003, _Digits);
+         TKP = NormalizeDouble(BID - 0.00009, _Digits);
+         if(trade.Sell(DinamicSize, _Symbol, BID, STL, TKP, ""))
+           {
+            Print("Ordem de Venda - sem falha. ResultRetcode: ", trade.ResultRetcode(), ", RetcodeDescription: ", trade.ResultRetcodeDescription());
+           }
+         else
+           {
+            Print("Ordem de Venda - com falha. ResultRetcode: ", trade.ResultRetcode(), ", RetcodeDescription: ", trade.ResultRetcodeDescription());
+           }
+        }
+  }
+//---
+
+//--- 
+bool HoraFechamento()
+  {
+   TimeToStruct(TimeCurrent(), horaAtual);
+   if(horaAtual.hour >= horaInicioFechamento)
+     {
+      if(horaAtual.hour == horaInicioFechamento)
+        {
+         if(horaAtual.min >= minutoInicioFechamento)
+           {
+            return true;
+           }
+         else
+           {
+            return false;
+           }
+        }
+      return true;
+     }
+   return false;
+  }
+  
+bool BuyTime()
+         {
+            if (//smaArrayExpoShort[0] > smaArrayShort[0] &&
+                smaArrayShort[0] > smaArrayMidle[0] && 
+                smaArrayMidle[0] > smaArrayLong[0] &&
+                smaArrayLong[0] > smaArrayVeryLong[0] &&
+              //  smaArrayExpoShort[0] > smaArrayExpoShort[1] &&
+                smaArrayShort[0] > smaArrayShort[1] &&
+                smaArrayMidle[0] > smaArrayMidle[1] &&
+                smaArrayLong[0]  > smaArrayLong[1] &&
+                smaArrayVeryLong[0] > smaArrayVeryLong[1]) { return true;}
+            
+            else {return false;}         
+         }
+         
+bool SellTime()
+         {
+            if (//smaArrayExpoShort[0] < smaArrayShort[0] &&
+                smaArrayShort[0] < smaArrayMidle[0] &&
+                smaArrayMidle[0] < smaArrayLong[0] &&
+                smaArrayLong[0] < smaArrayVeryLong[0] &&
+                //smaArrayExpoShort[0] < smaArrayExpoShort[1] &&
+                smaArrayShort[0] < smaArrayShort[1] &&
+                smaArrayMidle[0] < smaArrayMidle[1] &&
+                smaArrayLong[0] < smaArrayLong[1] &&
+                smaArrayVeryLong[0] < smaArrayVeryLong[1]) { return true;}
+            
+            else {return false;}
+         }        
+
+//---
+//---
+bool HoraNegociacao()
+  {
+   TimeToStruct(TimeCurrent(), horaAtual);
+   if(horaAtual.hour >= horaInicioAbertura && horaAtual.hour <= horaFimAbertura)
+     {
+      if(horaAtual.hour == horaInicioAbertura)
+        {
+         if(horaAtual.min >= minutoInicioAbertura)
+           {
+            return true;
+           }
+         else
+           {
+            return false;
+           }
+        }
+      if(horaAtual.hour == horaFimAbertura)
+        {
+         if(horaAtual.min <= minutoFimAbertura)
+           {
+            return true;
+           }
+         else
+           {
+            return false;
+           }
+        }
+      return true;
+     }
+   return false;
+  }
+//---
+//---
+void TrailingStop(double preco)
+  {
+   for(int i = PositionsTotal()-1; i>=0; i--)
+     {
+      string symbol = PositionGetSymbol(i);
+      ulong magic = PositionGetInteger(POSITION_MAGIC);
+      if(symbol == _Symbol && magic==magicNum)
+        {
+         ulong PositionTicket = PositionGetInteger(POSITION_TICKET);
+         double StopLossCorrente = PositionGetDouble(POSITION_SL);
+         double TakeProfitCorrente = PositionGetDouble(POSITION_TP);
+         if(PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY)
+           {
+            if(preco >= (StopLossCorrente + gatilhoTS))
+              {
+               double novoSL = NormalizeDouble(StopLossCorrente + stepTS, _Digits);
+               if(trade.PositionModify(PositionTicket, novoSL, TakeProfitCorrente))
+                 {
+                  Print("TrailingStop - sem falha. ResultRetcode: ", trade.ResultRetcode(), ", RetcodeDescription: ", trade.ResultRetcodeDescription());
+                 }
+               else
+                 {
+                  Print("TrailingStop - com falha. ResultRetcode: ", trade.ResultRetcode(), ", RetcodeDescription: ", trade.ResultRetcodeDescription());
+                 }
+              }
+           }
+         else
+            if(PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_SELL)
+              {
+               if(preco <= (StopLossCorrente - gatilhoTS))
+                 {
+                  double novoSL = NormalizeDouble(StopLossCorrente - stepTS, _Digits);
+                  if(trade.PositionModify(PositionTicket, novoSL, TakeProfitCorrente))
+                    {
+                     Print("TrailingStop - sem falha. ResultRetcode: ", trade.ResultRetcode(), ", RetcodeDescription: ", trade.ResultRetcodeDescription());
+                    }
+                  else
+                    {
+                     Print("TrailingStop - com falha. ResultRetcode: ", trade.ResultRetcode(), ", RetcodeDescription: ", trade.ResultRetcodeDescription());
+                    }
+                 }
+              }
+        }
+     }
+  }
+//---
+//---
+//+------------------------------------------------------------------+
+//|                                                                  |
+//+------------------------------------------------------------------+
+void BreakEven(double preco)
+  {
+   for(int i = PositionsTotal()-1; i>=0; i--)
+     {
+      string symbol = PositionGetSymbol(i);
+      ulong magic = PositionGetInteger(POSITION_MAGIC);
+      if(symbol == _Symbol && magic == magicNum)
+        {
+         ulong PositionTicket = PositionGetInteger(POSITION_TICKET);
+         double PrecoEntrada = PositionGetDouble(POSITION_PRICE_OPEN);
+         double TakeProfitCorrente = PositionGetDouble(POSITION_TP);
+         if(PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY)
+           {
+            if(preco >= (PrecoEntrada + gatilhoBE))
+              {
+               if(trade.PositionModify(PositionTicket, PrecoEntrada, TakeProfitCorrente))
+                 {
+                  Print("BreakEven - sem falha. ResultRetcode: ", trade.ResultRetcode(), ", RetcodeDescription: ", trade.ResultRetcodeDescription());
+                  beAtivo = true;
+                 }
+               else
+                 {
+                  Print("BreakEven - com falha. ResultRetcode: ", trade.ResultRetcode(), ", RetcodeDescription: ", trade.ResultRetcodeDescription());
+                 }
+              }
+           }
+         else
+            if(PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_SELL)
+              {
+               if(preco <= (PrecoEntrada - gatilhoBE))
+                 {
+                  if(trade.PositionModify(PositionTicket, PrecoEntrada, TakeProfitCorrente))
+                    {
+                     Print("BreakEven - sem falha. ResultRetcode: ", trade.ResultRetcode(), ", RetcodeDescription: ", trade.ResultRetcodeDescription());
+                     beAtivo = true;
+                    }
+                  else
+                    {
+                     Print("BreakEven - com falha. ResultRetcode: ", trade.ResultRetcode(), ", RetcodeDescription: ", trade.ResultRetcodeDescription());
+                    }
+                 }
+              }
+        }
+     }
+  }
+  
+void  FechaPosicao ()
+   {
+      for ( int  i = PositionsTotal() -1; i >= 0 ; i--)
+         {
+            string symbol = PositionGetSymbol(i);
+            ulong  magic = PositionGetInteger(POSITION_MAGIC);
+            if ( symbol == _Symbol && magic == magicNum )
+               {
+                  ulong  PositionTicket = PositionGetInteger (POSITION_TICKET);
+                  if ( trade.PositionClose ( PositionTicket , desvPts ))
+                     {
+                        Print ( " Posição Fechada - sem falha. ResultRetcode: " , trade . ResultRetcode (), " , RetcodeDescription: " , trade . ResultRetcodeDescription ());
+                     }
+                  else
+                     {
+                        Print ( " Posição Fechada - com falha. ResultRetcode: " , trade . ResultRetcode (), " , RetcodeDescription: " , trade . ResultRetcodeDescription ());
+                     }
+               }
+         }
+   }
+//+------------------------------------------------------------------+
